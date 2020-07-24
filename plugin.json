@@ -1,0 +1,11 @@
+﻿{
+  "Group": "Payment methods",
+  "FriendlyName": "iPay88",
+  "SystemName": "Payments.IpayDoubleEight",
+  "Version": "1.00",
+  "SupportedVersions": [ "4.30" ],
+  "Author": "George Chen",
+  "DisplayOrder": 1,
+  "FileName": "Nop.Plugin.Payments.IpayDoubleEight.dll",
+  "Description": "This plugin allows paying with iPay 88"
+}
