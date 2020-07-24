@@ -4,19 +4,14 @@ using System.Globalization;
 using System.Linq;
 using Microsoft.AspNetCore.Http;
 using Nop.Core;
-using Nop.Core.Domain.Customers;
-using Nop.Core.Domain.Directory;
 using Nop.Core.Domain.Orders;
-using Nop.Services.Catalog;
+using Nop.Plugin.Payments.IpayDoubleEight.Helper;
 using Nop.Services.Common;
 using Nop.Services.Configuration;
-using Nop.Services.Customers;
-using Nop.Services.Directory;
 using Nop.Services.Localization;
 using Nop.Services.Orders;
 using Nop.Services.Payments;
 using Nop.Services.Plugins;
-using Nop.Services.Tax;
 using Nop.Web.Framework;
 
 namespace Nop.Plugin.Payments.IpayDoubleEight
@@ -28,21 +23,12 @@ namespace Nop.Plugin.Payments.IpayDoubleEight
     {
         #region Fields
 
-        private readonly CurrencySettings _currencySettings;
         private readonly IAddressService _addressService;
-        private readonly ICheckoutAttributeParser _checkoutAttributeParser;
-        private readonly ICountryService _countryService;
-        private readonly ICurrencyService _currencyService;
-        private readonly ICustomerService _customerService;
         private readonly IGenericAttributeService _genericAttributeService;
-        private readonly IHttpContextAccessor _httpContextAccessor;
         private readonly ILocalizationService _localizationService;
         private readonly IOrderService _orderService;
         private readonly IPaymentService _paymentService;
-        private readonly IProductService _productService;
         private readonly ISettingService _settingService;
-        private readonly IStateProvinceService _stateProvinceService;
-        private readonly ITaxService _taxService;
         private readonly IWebHelper _webHelper;
         private readonly IpayDoubleEightPaymentSettings _ipayDoubleEightPaymentSettings;
 
@@ -50,39 +36,22 @@ namespace Nop.Plugin.Payments.IpayDoubleEight
 
         #region Ctor
 
-        public IpayDoubleEightPaymentProcessor(CurrencySettings currencySettings, 
+        public IpayDoubleEightPaymentProcessor(
             IAddressService addressService,
-            ICheckoutAttributeParser checkoutAttributeParser, 
-            ICountryService countryService,
-            ICurrencyService currencyService,
-            ICustomerService customerService,
             IGenericAttributeService genericAttributeService,
-            IHttpContextAccessor httpContextAccessor,
             ILocalizationService localizationService, 
             IOrderService orderService, 
             IPaymentService paymentService,
-            IProductService productService,
             ISettingService settingService, 
-            IStateProvinceService stateProvinceService,
-            ITaxService taxService, 
             IWebHelper webHelper, 
             IpayDoubleEightPaymentSettings ipayDoubleEightPaymentSettings)
         {
-            _currencySettings = currencySettings;
             _addressService = addressService;
-            _checkoutAttributeParser = checkoutAttributeParser;
-            _countryService = countryService;
-            _currencyService = currencyService;
-            _customerService = customerService;
             _genericAttributeService = genericAttributeService;
-            _httpContextAccessor = httpContextAccessor;
             _localizationService = localizationService;
             _orderService = orderService;
             _paymentService = paymentService;
-            _productService = productService;
             _settingService = settingService;
-            _stateProvinceService = stateProvinceService;
-            _taxService = taxService;
             _webHelper = webHelper;
             _ipayDoubleEightPaymentSettings = ipayDoubleEightPaymentSettings;
         }
@@ -94,7 +63,6 @@ namespace Nop.Plugin.Payments.IpayDoubleEight
         /// <summary>
         /// Create common query parameters for the request
         /// </summary>
-        /// <param name=""></param>
         /// <returns></returns>
         private IDictionary<string, string> CreateQueryParameters()
         {
@@ -136,38 +104,39 @@ namespace Nop.Plugin.Payments.IpayDoubleEight
             var refNo = $"{order.CustomOrderNumber}_{_orderService.GetOrderNotesByOrderId(order.Id).Count}";
             queryParameters.Add("RefNo", refNo);
 
-            var orderTotal = _currencyService.ConvertCurrency(order.OrderTotal, order.CurrencyRate);
+            var orderTotal = order.OrderTotal;
             var roundedOrderTotal = Math.Round(orderTotal, 2);
             var amount = roundedOrderTotal.ToString("#,#.00", CultureInfo.InvariantCulture);
             var amountForHash = new string(amount.Where(char.IsDigit).ToArray());
             queryParameters.Add("Amount", amount);
-            _genericAttributeService.SaveAttribute(order, IpayEightEightHelper.OrderTotalSentToIpayEightEight, roundedOrderTotal);
-            queryParameters.Add("Signature", IpayEightEightHelper.GenerateSHA256String($"{_ipayDoubleEightPaymentSettings.MerchantKey}" +
-                                                                                       $"{_ipayDoubleEightPaymentSettings.MerchantCode}" +
-                                                                                       $"{refNo}" +
-                                                                                       $"{amountForHash}" +
-                                                                                       $"{_ipayDoubleEightPaymentSettings.Currency}"));
+            _genericAttributeService.SaveAttribute(order, IpayDoubleEightHelper.OrderTotalSentToIpayDoubleEight, roundedOrderTotal);
+            queryParameters.Add("Signature", IpayDoubleEightHelper.GenerateSHA256String($"{_ipayDoubleEightPaymentSettings.MerchantKey}" +
+                                                                                        $"{_ipayDoubleEightPaymentSettings.MerchantCode}" +
+                                                                                        $"{refNo}" +
+                                                                                        $"{amountForHash}" +
+                                                                                        $"{_ipayDoubleEightPaymentSettings.Currency}"));
 
             var orderItem = _orderService.GetOrderItems(order.Id).First();
             var product = _orderService.GetProductByOrderItemId(orderItem.Id);
             queryParameters.Add("ProdDesc", product.Name);
 
-            var customer = _customerService.GetCustomerById(order.CustomerId);
-            queryParameters.Add("UserName", _customerService.GetCustomerFullName(customer));
-            queryParameters.Add("UserEmail", customer.Email);
-            var phoneNumber = _genericAttributeService.GetAttribute(customer,
-                NopCustomerDefaults.PhoneAttribute, defaultValue: "000000000");
-            queryParameters.Add("UserContact", phoneNumber);
+            //choosing correct order address
+            var orderAddress = _addressService.GetAddressById(
+                (postProcessPaymentRequest.Order.PickupInStore ? postProcessPaymentRequest.Order.PickupAddressId : postProcessPaymentRequest.Order.ShippingAddressId) ?? 0);
 
-            queryParameters.Add("ResponseURL", $"{_webHelper.GetStoreLocation()}{IpayEightEightDefault.IpayEightEightOrderCallbackRouteUrl}");
-            queryParameters.Add("BackendURL", $"{_webHelper.GetStoreLocation()}{IpayEightEightDefault.IpayEightEightBackendRouteUrl}");
+            queryParameters.Add("UserName", $"{orderAddress.FirstName}{orderAddress.LastName}");
+            queryParameters.Add("UserEmail", orderAddress.Email);
+            queryParameters.Add("UserContact", orderAddress.PhoneNumber);
+
+            queryParameters.Add("ResponseURL", $"{_webHelper.GetStoreLocation()}{IpayDoubleEightPaymentDefault.IpayDoubleEightCallbackRouteUrl}");
+            queryParameters.Add("BackendURL", $"{_webHelper.GetStoreLocation()}{IpayDoubleEightPaymentDefault.IpayDoubleEightBackendRouteUrl}");
 
             //prepare post
-            var form = new RemotePost { FormName = "ePayment", Url = _ipayEightEightSettings.IpayEightEightUrl };
+            var form = new RemotePost { FormName = "ePayment", Url = _ipayDoubleEightPaymentSettings.IpayDoubleEightUrl };
 
-            foreach (var parameter in parameters)
+            foreach (var queryParameter in queryParameters)
             {
-                form.Add(parameter.Key, parameter.Value);
+                form.Add(queryParameter.Key, queryParameter.Value);
             }
 
             //post
